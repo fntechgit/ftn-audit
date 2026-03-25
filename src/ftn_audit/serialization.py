@@ -13,6 +13,10 @@ from django.db import models
 
 def make_json_safe(value: Any) -> Any:
     """Recursively convert *value* to a JSON-serialisable form."""
+    return _make_json_safe(value, seen=set())
+
+
+def _make_json_safe(value: Any, *, seen: set[int]) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, decimal.Decimal):
@@ -26,8 +30,21 @@ def make_json_safe(value: Any) -> Any:
     if isinstance(value, models.Model):
         return value.pk
     if isinstance(value, dict):
-        return {str(k): make_json_safe(v) for k, v in value.items()}
+        value_id = id(value)
+        if value_id in seen:
+            return "<recursive_ref>"
+        seen.add(value_id)
+        try:
+            return {str(k): _make_json_safe(v, seen=seen) for k, v in value.items()}
+        finally:
+            seen.discard(value_id)
     if isinstance(value, (list, tuple, set, frozenset)):
-        return [make_json_safe(v) for v in value]
-    # Fallback
+        value_id = id(value)
+        if value_id in seen:
+            return "<recursive_ref>"
+        seen.add(value_id)
+        try:
+            return [_make_json_safe(v, seen=seen) for v in value]
+        finally:
+            seen.discard(value_id)
     return str(value)

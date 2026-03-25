@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Callable, Optional
+from typing import Awaitable, Callable, Optional, Union
 
+from asgiref.sync import iscoroutinefunction, markcoroutinefunction
 from django.http import HttpRequest, HttpResponse
 
 from ftn_audit.context import AuditContext
@@ -17,16 +18,35 @@ logger = logging.getLogger("audit")
 class AuditContextMiddleware:
     """Populates an ``AuditContext`` from every incoming request."""
 
-    def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
-        self.get_response = get_response
+    sync_capable = True
+    async_capable = True
 
-    def __call__(self, request: HttpRequest) -> HttpResponse:
+    def __init__(
+        self,
+        get_response: Union[
+            Callable[[HttpRequest], HttpResponse],
+            Callable[[HttpRequest], Awaitable[HttpResponse]],
+        ],
+    ) -> None:
+        self.get_response = get_response
+        self._is_async = iscoroutinefunction(get_response)
+        if self._is_async:
+            markcoroutinefunction(self)
+
+    def __call__(self, request: HttpRequest):
+        if self._is_async:
+            return self.__acall__(request)
         try:
             return self.get_response(request)
         finally:
             set_current_audit_context(None)
 
-    # noinspection PyMethodMayBeStatic
+    async def __acall__(self, request: HttpRequest) -> HttpResponse:
+        try:
+            return await self.get_response(request)
+        finally:
+            set_current_audit_context(None)
+
     def process_view(self, request: HttpRequest, view_func, view_args, view_kwargs):
         """Called after URL resolution — ``resolver_match`` is available."""
         try:
@@ -65,17 +85,60 @@ class AuditContextMiddleware:
         except Exception:
             logger.exception("Failed to build AuditContext")
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _build_raw_route(request: HttpRequest) -> Optional[str]:
         match = getattr(request, "resolver_match", None)
         if match is None:
             return None
         pattern = getattr(match, "route", None) or request.path
-        return f"{request.method}|/{pattern.lstrip('/')}"
+        canonical_pattern = AuditContextMiddleware._canonicalize_route_pattern(pattern)
+        return f"{request.method}|/{canonical_pattern.lstrip('/')}"
+
+    @staticmethod
+    def _canonicalize_route_pattern(pattern: str) -> str:
+        pattern = pattern.lstrip("^").rstrip("$")
+        pattern = AuditContextMiddleware._replace_regex_named_groups(pattern)
+        canonical_segments = []
+        for segment in pattern.split("/"):
+            canonical_segments.append(
+                AuditContextMiddleware._canonicalize_route_segment(segment)
+            )
+        return "/".join(canonical_segments)
+
+    @staticmethod
+    def _replace_regex_named_groups(pattern: str) -> str:
+        rewritten = ""
+        cursor = 0
+        while True:
+            start = pattern.find("(?P<", cursor)
+            if start == -1:
+                rewritten += pattern[cursor:]
+                break
+
+            rewritten += pattern[cursor:start]
+            name_end = pattern.find(">", start + 4)
+            if name_end == -1:
+                rewritten += pattern[start:]
+                break
+
+            group_close = pattern.find(")", name_end + 1)
+            if group_close == -1:
+                rewritten += pattern[start:]
+                break
+
+            group_name = pattern[start + 4 : name_end]
+            rewritten += f":{group_name}" if group_name else ""
+            cursor = group_close + 1
+
+        return rewritten
+
+    @staticmethod
+    def _canonicalize_route_segment(segment: str) -> str:
+        if segment.startswith("<") and segment.endswith(">"):
+            token = segment.replace("<", "").replace(">", "")
+            token = token.split(":", 1)[1] if ":" in token else token
+            return f":{token}"
+        return segment
 
     @staticmethod
     def _get_client_ip(request: HttpRequest) -> str:

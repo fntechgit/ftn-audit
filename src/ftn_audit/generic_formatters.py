@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from ftn_audit.base_formatter import AbstractAuditLogFormatter
+from ftn_audit.constants import ATTR_ACTION, ATTR_FIELD_NAME, ATTR_PK_SET
 
 
 class GenericCreationFormatter(AbstractAuditLogFormatter):
@@ -13,12 +14,7 @@ class GenericCreationFormatter(AbstractAuditLogFormatter):
         return f"Created {model_name} #{self.subject.pk}"
 
     def get_attributes(self) -> Dict[str, Any]:
-        return {
-            "audit.event_type": self.event_type,
-            "audit.model": type(self.subject).__name__,
-            "audit.model_pk": str(self.subject.pk),
-            **self.get_user_info(),
-        }
+        return self.get_default_attributes()
 
 
 class GenericUpdateFormatter(AbstractAuditLogFormatter):
@@ -29,16 +25,7 @@ class GenericUpdateFormatter(AbstractAuditLogFormatter):
         return f"Updated {model_name} #{self.subject.pk} ({fields})"
 
     def get_attributes(self) -> Dict[str, Any]:
-        attrs: Dict[str, Any] = {
-            "audit.event_type": self.event_type,
-            "audit.model": type(self.subject).__name__,
-            "audit.model_pk": str(self.subject.pk),
-            **self.get_user_info(),
-        }
-        changes = self.build_change_details()
-        if changes:
-            attrs["audit.changeset"] = changes
-        return attrs
+        return self.get_default_attributes()
 
 
 class GenericDeletionFormatter(AbstractAuditLogFormatter):
@@ -47,12 +34,7 @@ class GenericDeletionFormatter(AbstractAuditLogFormatter):
         return f"Deleted {model_name} #{self.subject.pk}"
 
     def get_attributes(self) -> Dict[str, Any]:
-        return {
-            "audit.event_type": self.event_type,
-            "audit.model": type(self.subject).__name__,
-            "audit.model_pk": str(self.subject.pk),
-            **self.get_user_info(),
-        }
+        return self.get_default_attributes()
 
 
 class GenericCollectionUpdateFormatter(AbstractAuditLogFormatter):
@@ -69,12 +51,11 @@ class GenericCollectionUpdateFormatter(AbstractAuditLogFormatter):
         return f"{self.action} on {model_name} #{self.subject.pk}.{self.field_name}"
 
     def get_attributes(self) -> Dict[str, Any]:
-        return {
-            "audit.event_type": self.event_type,
-            "audit.model": type(self.subject).__name__,
-            "audit.model_pk": str(self.subject.pk),
-            "audit.field_name": self.field_name,
-            "audit.action": self.action,
-            "audit.pk_set": sorted(self.pk_set) if self.pk_set else [],
-            **self.get_user_info(),
-        }
+        pk_set = sorted(self.pk_set) if self.pk_set else []
+        return self.merge_attributes(
+            {
+                ATTR_FIELD_NAME: self.field_name,
+                ATTR_ACTION: self.action,
+                ATTR_PK_SET: pk_set,
+            }
+        )

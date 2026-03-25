@@ -54,20 +54,16 @@ class AuditFormattersRegistry:
         rules = cls._rules.get(model)
         if not rules:
             return None
-        # 1. exact route + event match
         for r in rules:
             if r.raw_route and r.event_type:
                 if r.raw_route == raw_route and r.event_type == event_type:
                     return r.formatter_cls
-        # 2. route-only match
         for r in rules:
             if r.raw_route and not r.event_type and r.raw_route == raw_route:
                 return r.formatter_cls
-        # 3. event-only match
         for r in rules:
             if r.event_type and not r.raw_route and r.event_type == event_type:
                 return r.formatter_cls
-        # 4. model default (no route, no event)
         for r in rules:
             if not r.raw_route and not r.event_type:
                 return r.formatter_cls
@@ -85,7 +81,12 @@ def register_audit_formatter(
     event_type: Optional[str] = None,
     priority: int = 0,
 ):
-    """Decorator that registers a formatter class for *model*."""
+    """Decorator that registers a formatter class for *model*.
+
+    Resolution is tiered by specificity before priority:
+    (raw_route + event_type) -> (raw_route) -> (event_type) -> (default).
+    ``priority`` only orders rules inside the same tier.
+    """
 
     def decorator(formatter_cls):
         AuditFormattersRegistry.register(
