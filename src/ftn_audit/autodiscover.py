@@ -7,7 +7,7 @@ import logging
 
 from django.apps import apps
 
-from ftn_audit.constants import LOGGER_AUDIT, TASK_EMIT_AUDIT_LOG
+from ftn_audit.constants import LOGGER_AUDIT
 
 logger = logging.getLogger(LOGGER_AUDIT)
 
@@ -33,20 +33,3 @@ def autodiscover_formatters():
                 module_name,
                 exc_info=True,
             )
-
-
-def verify_celery_task_registered() -> None:
-    """Log integration hints when the shared Celery task is not visible."""
-    try:
-        from celery import current_app
-    except Exception:
-        logger.debug("Celery not importable while checking task registration.")
-        return
-
-    if TASK_EMIT_AUDIT_LOG not in getattr(current_app, "tasks", {}):
-        logger.warning(
-            "Task '%s' not registered in current Celery app. "
-            "Enable ftn_audit task discovery in your Celery setup "
-            "(e.g. ftn_audit.configure_celery_audit(app)).",
-            TASK_EMIT_AUDIT_LOG,
-        )

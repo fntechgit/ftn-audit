@@ -55,7 +55,6 @@ def test_connect_m2m_signals_wires_m2m_receiver():
 @override_settings(
     AUDIT_AUTO_CONNECT_SIGNALS=False,
     AUDIT_AUTO_DISCOVER_FORMATTERS=False,
-    AUDIT_VERIFY_CELERY_TASK_REGISTRATION=False,
 )
 def test_app_ready_is_scoped_by_default():
     app_config = FtnAuditConfig("ftn_audit", __import__("ftn_audit"))
@@ -72,7 +71,6 @@ def test_app_ready_is_scoped_by_default():
 @override_settings(
     AUDIT_AUTO_CONNECT_SIGNALS=False,
     AUDIT_AUTO_DISCOVER_FORMATTERS=True,
-    AUDIT_VERIFY_CELERY_TASK_REGISTRATION=False,
 )
 def test_app_ready_loads_formatter_registrations():
     class _StartupModel:
