@@ -31,6 +31,7 @@ def emit_audit_log(payload: Dict[str, Any]) -> None:
 
 @shared_task(
     bind=True,
+    ignore_result=True,
     max_retries=DEFAULT_TASK_MAX_RETRIES,
     default_retry_delay=DEFAULT_TASK_RETRY_DELAY_SECONDS,
     name=TASK_EMIT_AUDIT_LOG,
@@ -39,7 +40,7 @@ def emit_audit_log_task(self, payload: Dict[str, Any]) -> None:
     """Best-effort task that retries transient OTLP failures."""
     try:
         emit_audit_log(payload)
-        logger.debug("Audit log emitted: %s", payload.get("description", ""))
+        logger.info("Audit log emitted: %s", payload.get("description", ""))
     except Exception as exc:
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)

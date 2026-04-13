@@ -31,7 +31,7 @@ def test_build_changeset_with_dirtyfieldsmixin_returns_old_and_new_values():
     }
 
 
-def test_build_changeset_defaults_check_relationship_to_false():
+def test_build_changeset_defaults_check_relationship_to_true():
     class _DirtyMock:
         def __init__(self):
             self.name = "new"
@@ -45,7 +45,7 @@ def test_build_changeset_defaults_check_relationship_to_false():
     changeset = build_changeset(instance)
 
     assert changeset == {"name": {"old": "old", "new": "new"}}
-    assert instance.kwargs == {"check_relationship": False}
+    assert instance.kwargs == {"check_relationship": True}
 
 
 def test_build_changeset_allows_overriding_check_relationship():

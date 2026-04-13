@@ -54,3 +54,7 @@ def test_emit_audit_log_task_stops_retry_after_max_retries(caplog):
         assert "Failed to emit audit log after" in caplog.text
     finally:
         task.request.retries = original_retries
+
+
+def test_emit_audit_log_task_ignores_result_backend():
+    assert emit_audit_log_task.ignore_result is True

@@ -29,11 +29,18 @@ _EMITTER = FormatterEmitter(logger=logger)
 
 def _pre_save_receiver(sender, instance, **kwargs):
     """Capture dirty-field changeset *before* the DB write."""
+    if kwargs.get("raw"):
+        return
     if not AuditFormattersRegistry.has_model(sender):
         return
     try:
         if instance.pk:
             changeset = build_changeset(instance)
+            changeset = _filter_changeset_by_update_fields(
+                instance,
+                changeset,
+                kwargs.get("update_fields"),
+            )
             if changeset:
                 setattr(instance, _CHANGESET_ATTR, changeset)
     except Exception:
@@ -42,6 +49,8 @@ def _pre_save_receiver(sender, instance, **kwargs):
 
 def _post_save_receiver(sender, instance, created, **kwargs):
     """Emit creation or update audit event."""
+    if kwargs.get("raw"):
+        return
     if not AuditFormattersRegistry.has_model(sender):
         return
     try:
@@ -86,6 +95,28 @@ def _post_save_receiver(sender, instance, created, **kwargs):
                     sender.__name__,
                     exc_info=True,
                 )
+
+
+def _filter_changeset_by_update_fields(instance, changeset, update_fields):
+    if not changeset or not update_fields:
+        return changeset
+
+    allowed = set(update_fields)
+    try:
+        model_fields = getattr(instance, "_meta", None).fields or []
+    except Exception:
+        model_fields = []
+
+    for field in model_fields:
+        field_name = getattr(field, "name", None)
+        attname = getattr(field, "attname", None)
+        if field_name in allowed or attname in allowed:
+            if field_name:
+                allowed.add(field_name)
+            if attname:
+                allowed.add(attname)
+
+    return {key: value for key, value in changeset.items() if key in allowed}
 
 
 def _post_delete_receiver(sender, instance, **kwargs):

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from ftn_audit.context import AuditContext
 from ftn_audit.context_storage import set_current_audit_context
 from ftn_audit.generic_formatters import GenericCreationFormatter
-from ftn_audit.receiver import _post_save_receiver
+from ftn_audit.receiver import _post_save_receiver, _pre_save_receiver
 from ftn_audit.registry import AuditFormattersRegistry
 
 
@@ -41,4 +41,58 @@ def test_post_save_creation_emits_event(monkeypatch):
     assert attributes["user_id"] == 42
 
     set_current_audit_context(None)
+    AuditFormattersRegistry.reset()
+
+
+def test_pre_save_skips_raw_fixture_load(monkeypatch):
+    calls = []
+
+    class _InstanceWithRaw:
+        pk = 7
+
+    def _fake_build_changeset(_instance):
+        calls.append("called")
+        return {"name": {"old": "a", "new": "b"}}
+
+    AuditFormattersRegistry.reset()
+    AuditFormattersRegistry.register(_Model, formatter_cls=GenericCreationFormatter)
+    monkeypatch.setattr("ftn_audit.receiver.build_changeset", _fake_build_changeset)
+
+    instance = _InstanceWithRaw()
+    _pre_save_receiver(sender=_Model, instance=instance, raw=True)
+
+    assert calls == []
+    assert not hasattr(instance, "_ftn_audit_pending_changeset")
+    AuditFormattersRegistry.reset()
+
+
+def test_pre_save_filters_changeset_to_update_fields(monkeypatch):
+    class _Field:
+        def __init__(self, name: str, attname: str):
+            self.name = name
+            self.attname = attname
+
+    class _Meta:
+        fields = [_Field("name", "name"), _Field("owner", "owner_id")]
+
+    class _InstanceWithMeta:
+        pk = 7
+        _meta = _Meta()
+
+    def _fake_build_changeset(_instance):
+        return {
+            "name": {"old": "a", "new": "b"},
+            "owner": {"old": 1, "new": 2},
+        }
+
+    AuditFormattersRegistry.reset()
+    AuditFormattersRegistry.register(_Model, formatter_cls=GenericCreationFormatter)
+    monkeypatch.setattr("ftn_audit.receiver.build_changeset", _fake_build_changeset)
+
+    instance = _InstanceWithMeta()
+    _pre_save_receiver(sender=_Model, instance=instance, update_fields={"name"})
+
+    assert getattr(instance, "_ftn_audit_pending_changeset") == {
+        "name": {"old": "a", "new": "b"}
+    }
     AuditFormattersRegistry.reset()

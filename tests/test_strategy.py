@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import threading
 from unittest.mock import ANY, patch
 
@@ -60,13 +61,17 @@ def test_get_audit_strategy_returns_noop_when_delivery_mode_noop(settings):
 def test_otlp_strategy_sync_mode_forces_async_enqueue(settings, caplog):
     callbacks = []
     settings.AUDIT_DELIVERY_MODE = "sync"
+    _reset_strategy_singleton()
+
+    with caplog.at_level("WARNING", logger="audit"):
+        first = get_audit_strategy()
+        second = get_audit_strategy()
 
     with patch("django.db.transaction.on_commit", side_effect=lambda cb: callbacks.append(cb)):
         with patch("ftn_audit.tasks.emit_audit_log_task.delay") as delay_mock:
-            OtlpAuditStrategy().emit("Sync event", {"audit.event_type": "update"})
+            first.emit("Sync event", {"audit.event_type": "update"})
             assert len(callbacks) == 1
-            with caplog.at_level("WARNING", logger="audit"):
-                callbacks[0]()
+            callbacks[0]()
 
     delay_mock.assert_called_once_with(
         {
@@ -75,7 +80,9 @@ def test_otlp_strategy_sync_mode_forces_async_enqueue(settings, caplog):
             "timestamp_ns": ANY,
         }
     )
-    assert "Forcing async Celery emission for safety." in caplog.text
+    assert first is second
+    assert isinstance(first, OtlpAuditStrategy)
+    assert caplog.text.count("Forcing async Celery emission for safety.") == 1
 
 
 def test_reset_audit_strategy_resolves_new_instance(settings):
@@ -138,3 +145,23 @@ def test_get_audit_strategy_initializes_singleton_once_under_concurrency(setting
     assert ctor.call_count == 1
     first = results[0]
     assert all(item is first for item in results)
+
+
+def test_otlp_strategy_sanitizes_attributes_before_celery_dispatch():
+    callbacks = []
+    now = datetime.datetime(2026, 4, 13, 12, 0, tzinfo=datetime.timezone.utc)
+
+    with patch("django.db.transaction.on_commit", side_effect=lambda cb: callbacks.append(cb)):
+        with patch("ftn_audit.tasks.emit_audit_log_task.delay") as delay_mock:
+            OtlpAuditStrategy().emit(
+                "Serialized event",
+                {"when": now, "nums": [1, 2, 3]},
+            )
+            assert len(callbacks) == 1
+            callbacks[0]()
+
+    payload = delay_mock.call_args.args[0]
+    assert payload["description"] == "Serialized event"
+    assert payload["timestamp_ns"] is not None
+    assert payload["attributes"]["when"] == now.isoformat()
+    assert payload["attributes"]["nums"] == [1, 2, 3]

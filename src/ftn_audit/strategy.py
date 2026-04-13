@@ -20,6 +20,7 @@ from ftn_audit.constants import (
     SETTING_AUDIT_DELIVERY_MODE,
     TASK_EMIT_AUDIT_LOG,
 )
+from ftn_audit.serialization import make_json_safe
 
 logger = logging.getLogger(LOGGER_AUDIT)
 
@@ -37,15 +38,9 @@ class OtlpAuditStrategy:
     def emit(self, description: str, attributes: Dict[str, Any]) -> None:
         payload = {
             "description": description,
-            "attributes": attributes,
+            "attributes": make_json_safe(attributes),
             "timestamp_ns": time.time_ns(),
         }
-        mode = getattr(settings, SETTING_AUDIT_DELIVERY_MODE, DEFAULT_DELIVERY_MODE)
-        if mode == DELIVERY_MODE_SYNC:
-            logger.warning(
-                "AUDIT_DELIVERY_MODE='sync' is not supported. "
-                "Forcing async Celery emission for safety."
-            )
         try:
             transaction.on_commit(lambda: _enqueue_async(payload))
         except Exception:
@@ -71,6 +66,11 @@ def get_audit_strategy():
         if (not enabled) or delivery_mode == DELIVERY_MODE_NOOP:
             _strategy_instance = NoopAuditStrategy()
         else:
+            if delivery_mode == DELIVERY_MODE_SYNC:
+                logger.warning(
+                    "AUDIT_DELIVERY_MODE='sync' is not supported. "
+                    "Forcing async Celery emission for safety."
+                )
             _strategy_instance = OtlpAuditStrategy()
     return _strategy_instance
 

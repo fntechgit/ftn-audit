@@ -28,7 +28,7 @@ ftn-audit/
     receiver.py             # pre_save/post_save/post_delete signal receivers
     m2m_receiver.py         # m2m_changed signal receiver for collection auditing
     strategy.py             # NoopAuditStrategy + OtlpAuditStrategy + get_audit_strategy()
-    jobs.py                 # emit_audit_log_task Celery shared_task (max_retries=2)
+    tasks.py                # emit_audit_log_task Celery shared_task (max_retries=2)
     py.typed                # PEP 561 marker
 ```
 
@@ -49,6 +49,16 @@ ftn-audit/
 - **Formatter priority:** exact route+event → route-only → event-only → model default → generic
 - **M2M auditing is opt-in** via `register_audit_collection(Model, "field_name")`
 - **Never break the request** — all signal handlers wrapped in try/except
+
+## Migration Notes
+
+- `AUDIT_CHANGESET_CHECK_RELATIONSHIP` controls whether FK changes are included in update changesets.
+  Default is `True`. If a service wants to skip FK auditing, set
+  `AUDIT_CHANGESET_CHECK_RELATIONSHIP = False`.
+- `raw_route` emitted by middleware is canonicalized (`:name` placeholders). Existing formatter
+  registrations using `<type:name>` or `(?P<name>...)` must be updated to the `:name` form.
+- `ftn_audit.jobs` was renamed to `ftn_audit.tasks`.
+  Update imports to `from ftn_audit.tasks import emit_audit_log_task`.
 
 ## Consuming Services
 
