@@ -6,6 +6,7 @@ import logging
 
 from django.db.models.signals import post_delete, post_save, pre_save
 
+from ftn_audit.context_hydration import get_current_audit_context_with_user
 from ftn_audit.changeset import build_changeset
 from ftn_audit.constants import (
     DISPATCH_UID_POST_DELETE,
@@ -16,7 +17,6 @@ from ftn_audit.constants import (
     EVENT_UPDATE,
     LOGGER_AUDIT,
 )
-from ftn_audit.context_storage import get_current_audit_context
 from ftn_audit.formatter_factory import AuditLogFormatterFactory
 from ftn_audit.formatter_emitter import FormatterEmitter
 from ftn_audit.registry import AuditFormattersRegistry
@@ -54,7 +54,7 @@ def _post_save_receiver(sender, instance, created, **kwargs):
     if not AuditFormattersRegistry.has_model(sender):
         return
     try:
-        ctx = get_current_audit_context()
+        ctx = get_current_audit_context_with_user()
         if ctx is None:
             logger.debug(
                 "dropping post_save audit event due to missing context for %s #%s",
@@ -124,7 +124,7 @@ def _post_delete_receiver(sender, instance, **kwargs):
     if not AuditFormattersRegistry.has_model(sender):
         return
     try:
-        ctx = get_current_audit_context()
+        ctx = get_current_audit_context_with_user()
         if ctx is None:
             logger.debug(
                 "dropping post_delete audit event due to missing context for %s #%s",

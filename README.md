@@ -5,6 +5,7 @@ Shared Django/DRF audit logging library with asynchronous OTLP delivery via Cele
 ## What this package includes
 
 - Request and user context capture via middleware (`AuditContextMiddleware`)
+- Late actor hydration in receivers when middleware context has no user yet
 - Signal receivers (`pre_save`, `post_save`, `post_delete`, `m2m_changed`)
 - Formatter registry with route-aware and event-aware selection
 - Generic formatter fallback when no custom formatter is registered
@@ -78,7 +79,6 @@ Formatter resolution order:
 ```python
 AUDIT_ENABLED = True
 AUDIT_DELIVERY_MODE = "celery"  # celery | sync | noop
-AUDIT_OTLP_FALLBACK = "structured_log"  # structured_log | drop
 AUDIT_STRICT_FORMATTER_VALIDATION = True
 AUDIT_AUTO_CONNECT_SIGNALS = True  # optional, default True
 AUDIT_AUTO_DISCOVER_FORMATTERS = True  # optional, default True
@@ -101,17 +101,24 @@ AUDIT_CHANGESET_CHECK_RELATIONSHIP = True  # optional, include FK changes in cha
 
 - Audit code should never break request execution:
   all middleware/receiver/strategy exceptions are caught and logged.
+- Receivers resolve actor as best-effort:
+  if `AuditContext.user_id` is empty, actor fields are hydrated from current `request.user` when available.
 - Enqueue failures are logged and dropped.
 - OTLP emission failures in Celery use bounded retries.
+- After max retries, the task logs an error and drops the event.
 - OTLP enqueue is registered via `transaction.on_commit`, so events are emitted only after commit.
 - Signal handlers ignore `raw=True` fixture loads to avoid spurious audit events.
 - Changesets are filtered by `update_fields` when present, so only persisted fields are audited.
 - M2M payload safety:
   PK sets are capped (`M2M_PK_SET_MAX`) to avoid oversized OTLP payloads.
 - Celery audit task uses `ignore_result=True` to avoid unnecessary result-backend writes.
+- Celery audit task uses late acknowledgements and `reject_on_worker_lost=True` to improve redelivery on worker crash.
 
 ## Known limitations
 
+- ContextVars do not cross process boundaries (e.g. Celery workers).
+  For background jobs, pass actor metadata explicitly and set `AuditContext` in task scope.
+- `AUDIT_OTLP_FALLBACK` is reserved but not currently enforced by runtime behavior.
 - Django bulk operations bypass per-instance signals (`bulk_create`, `bulk_update`, queryset `update`, queryset `delete`).
   If needed, add explicit auditing at service-layer boundaries.
 - Reverse-side M2M modifications (`reverse=True`) are not audited by default.

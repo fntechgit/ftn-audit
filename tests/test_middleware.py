@@ -7,7 +7,12 @@ import pytest
 from django.test import RequestFactory
 
 from ftn_audit.context import AuditContext
-from ftn_audit.context_storage import get_current_audit_context, set_current_audit_context
+from ftn_audit.context_storage import (
+    get_current_audit_context,
+    get_current_audit_request,
+    set_current_audit_context,
+    set_current_audit_request,
+)
 from ftn_audit.middleware import AuditContextMiddleware
 
 
@@ -27,10 +32,12 @@ class _AnonymousUser:
 class TestAuditContextMiddleware:
     def setup_method(self):
         set_current_audit_context(None)
+        set_current_audit_request(None)
         self.factory = RequestFactory()
 
     def teardown_method(self):
         set_current_audit_context(None)
+        set_current_audit_request(None)
 
     def test_process_view_builds_context_for_authenticated_user(self):
         middleware = AuditContextMiddleware(lambda request: None)
@@ -105,11 +112,13 @@ class TestAuditContextMiddleware:
     def test_call_always_clears_context(self):
         middleware = AuditContextMiddleware(lambda request: (_ for _ in ()).throw(RuntimeError("boom")))
         set_current_audit_context(AuditContext(user_id=5))
+        request = self.factory.get("/")
 
         with pytest.raises(RuntimeError, match="boom"):
-            middleware(self.factory.get("/"))
+            middleware(request)
 
         assert get_current_audit_context() is None
+        assert get_current_audit_request() is None
 
     def test_async_call_always_clears_context(self):
         async def _boom(_request):
@@ -119,8 +128,10 @@ class TestAuditContextMiddleware:
 
         async def _run_and_assert():
             set_current_audit_context(AuditContext(user_id=5))
+            request = self.factory.get("/")
             with pytest.raises(RuntimeError, match="async boom"):
-                await middleware(self.factory.get("/"))
+                await middleware(request)
             assert get_current_audit_context() is None
+            assert get_current_audit_request() is None
 
         asyncio.run(_run_and_assert())

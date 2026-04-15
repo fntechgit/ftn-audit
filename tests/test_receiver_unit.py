@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ftn_audit.context import AuditContext
-from ftn_audit.context_storage import set_current_audit_context
+from ftn_audit.context_storage import set_current_audit_context, set_current_audit_request
 from ftn_audit.generic_formatters import GenericCreationFormatter
 from ftn_audit.receiver import _post_save_receiver, _pre_save_receiver
 from ftn_audit.registry import AuditFormattersRegistry
@@ -41,6 +41,43 @@ def test_post_save_creation_emits_event(monkeypatch):
     assert attributes["user_id"] == 42
 
     set_current_audit_context(None)
+    set_current_audit_request(None)
+    AuditFormattersRegistry.reset()
+
+
+def test_post_save_creation_hydrates_user_from_request_when_context_user_missing(monkeypatch):
+    emitted = []
+
+    class _Strategy:
+        def emit(self, description, attributes):
+            emitted.append((description, attributes))
+
+    class _RequestUser:
+        is_authenticated = True
+        pk = 77
+        email = "actor@test.local"
+        first_name = "Actor"
+        last_name = "User"
+
+    class _Request:
+        user = _RequestUser()
+
+    AuditFormattersRegistry.reset()
+    AuditFormattersRegistry.register(_Model, formatter_cls=GenericCreationFormatter)
+
+    set_current_audit_context(AuditContext(user_id=None, raw_route="POST|/v1/x/"))
+    set_current_audit_request(_Request())
+    monkeypatch.setattr("ftn_audit.formatter_emitter.get_audit_strategy", lambda: _Strategy())
+
+    _post_save_receiver(sender=_Model, instance=_Instance(pk=9), created=True)
+
+    assert len(emitted) == 1
+    _, attributes = emitted[0]
+    assert attributes["user_id"] == 77
+    assert attributes["user_email"] == "actor@test.local"
+
+    set_current_audit_context(None)
+    set_current_audit_request(None)
     AuditFormattersRegistry.reset()
 
 
