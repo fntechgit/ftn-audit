@@ -7,7 +7,9 @@ import logging
 
 from django.apps import apps
 
-logger = logging.getLogger("audit")
+from ftn_audit.constants import LOGGER_AUDIT
+
+logger = logging.getLogger(LOGGER_AUDIT)
 
 
 def autodiscover_formatters():
@@ -17,9 +19,17 @@ def autodiscover_formatters():
         try:
             importlib.import_module(module_name)
             logger.debug("Discovered audit formatters in %s", module_name)
-        except ModuleNotFoundError:
-            pass
+        except ModuleNotFoundError as exc:
+            if exc.name == module_name:
+                continue
+            logger.warning(
+                "Error importing %s. Check nested imports inside that module.",
+                module_name,
+                exc_info=True,
+            )
         except Exception:
             logger.warning(
-                "Error importing %s", module_name, exc_info=True
+                "Error importing %s. Your custom formatter registration may be incomplete.",
+                module_name,
+                exc_info=True,
             )

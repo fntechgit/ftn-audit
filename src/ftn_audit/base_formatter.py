@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Protocol, runtime_checkable
 
+from ftn_audit.constants import (
+    ATTR_CHANGESET,
+    ATTR_EVENT_TYPE,
+    ATTR_MODEL,
+    ATTR_MODEL_PK,
+    ATTR_RAW_ROUTE,
+    DEFAULT_IGNORED_CHANGE_FIELDS,
+)
 from ftn_audit.context import AuditContext
 
 
@@ -18,10 +26,7 @@ class IAuditLogFormatter(Protocol):
 class AbstractAuditLogFormatter:
     """Convenient base class with shared helpers."""
 
-    IGNORED_FIELDS = frozenset({
-        "created", "modified", "created_at", "updated_at",
-        "created_by", "updated_by",
-    })
+    IGNORED_FIELDS = frozenset(DEFAULT_IGNORED_CHANGE_FIELDS)
 
     def __init__(
         self,
@@ -56,4 +61,25 @@ class AbstractAuditLogFormatter:
         raise NotImplementedError
 
     def get_attributes(self) -> Dict[str, Any]:
-        raise NotImplementedError
+        return self.get_default_attributes()
+
+    def get_default_attributes(self) -> Dict[str, Any]:
+        """Reusable baseline attributes for most audit events."""
+        attrs: Dict[str, Any] = {
+            ATTR_EVENT_TYPE: self.event_type,
+            ATTR_MODEL: type(self.subject).__name__,
+            ATTR_MODEL_PK: str(getattr(self.subject, "pk", "")),
+            ATTR_RAW_ROUTE: self.context.raw_route,
+            **self.get_user_info(),
+        }
+        changes = self.build_change_details()
+        if changes:
+            attrs[ATTR_CHANGESET] = changes
+        return attrs
+
+    def merge_attributes(self, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Convenience helper for subclasses to extend defaults safely."""
+        merged = self.get_default_attributes()
+        if extra:
+            merged.update(extra)
+        return merged

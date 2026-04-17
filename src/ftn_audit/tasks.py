@@ -8,29 +8,42 @@ from typing import Any, Dict
 
 from celery import shared_task
 
-logger = logging.getLogger("audit.otlp")
+from ftn_audit.constants import (
+    DEFAULT_TASK_MAX_RETRIES,
+    DEFAULT_TASK_RETRY_DELAY_SECONDS,
+    LOGGER_AUDIT_OTLP,
+    OTEL_LOGGER_NAME,
+    TASK_EMIT_AUDIT_LOG,
+)
+
+logger = logging.getLogger(LOGGER_AUDIT_OTLP)
+
+
+def emit_audit_log(payload: Dict[str, Any]) -> None:
+    """Deliver a single audit record via OpenTelemetry Logs API."""
+    # OpenTelemetry Python currently exposes Logs API under `_logs` in 1.x.
+    # Keep opentelemetry-api/opentelemetry-sdk pinned to <2.0 for compatibility.
+    from opentelemetry._logs import get_logger_provider
+
+    otel_logger = get_logger_provider().get_logger(OTEL_LOGGER_NAME)
+    otel_logger.emit(_build_log_record(payload))
 
 
 @shared_task(
     bind=True,
-    max_retries=2,
-    default_retry_delay=5,
-    name="ftn_audit.emit_audit_log",
+    ignore_result=True,
+    max_retries=DEFAULT_TASK_MAX_RETRIES,
+    default_retry_delay=DEFAULT_TASK_RETRY_DELAY_SECONDS,
+    name=TASK_EMIT_AUDIT_LOG,
 )
 def emit_audit_log_task(self, payload: Dict[str, Any]) -> None:
-    """Deliver a single audit record via OpenTelemetry Logs API."""
+    """Best-effort task that retries transient OTLP failures."""
     try:
-        from opentelemetry._logs import get_logger_provider
-
-        otel_logger = get_logger_provider().get_logger("ftn_audit")
-        otel_logger.emit(
-            _build_log_record(payload)
-        )
-        logger.debug("Audit log emitted: %s", payload.get("description", ""))
+        emit_audit_log(payload)
+        logger.info("Audit log emitted: %s", payload.get("description", ""))
     except Exception as exc:
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
-        # Final failure — log locally so the event is not silently lost
         logger.error(
             "Failed to emit audit log after %d retries: %s | payload=%s",
             self.max_retries,
@@ -41,6 +54,8 @@ def emit_audit_log_task(self, payload: Dict[str, Any]) -> None:
 
 def _build_log_record(payload: Dict[str, Any]):
     """Build an OTel LogRecord from our audit payload."""
+    # OpenTelemetry Python currently exposes Logs API under `_logs` in 1.x.
+    # Keep opentelemetry-api/opentelemetry-sdk pinned to <2.0 for compatibility.
     from opentelemetry._logs import LogRecord, SeverityNumber
 
     return LogRecord(
@@ -48,6 +63,7 @@ def _build_log_record(payload: Dict[str, Any]):
         severity_number=SeverityNumber.INFO,
         severity_text="INFO",
         attributes=_flatten_attributes(payload.get("attributes", {})),
+        timestamp=payload.get("timestamp_ns"),
     )
 
 
