@@ -31,10 +31,12 @@ def emit_audit_log(payload: Dict[str, Any]) -> None:
 
 @shared_task(
     bind=True,
+    acks_late=True,
     ignore_result=True,
     max_retries=DEFAULT_TASK_MAX_RETRIES,
     default_retry_delay=DEFAULT_TASK_RETRY_DELAY_SECONDS,
     name=TASK_EMIT_AUDIT_LOG,
+    reject_on_worker_lost=True,
 )
 def emit_audit_log_task(self, payload: Dict[str, Any]) -> None:
     """Best-effort task that retries transient OTLP failures."""
@@ -54,16 +56,31 @@ def emit_audit_log_task(self, payload: Dict[str, Any]) -> None:
 
 def _build_log_record(payload: Dict[str, Any]):
     """Build an OTel LogRecord from our audit payload."""
-    # OpenTelemetry Python currently exposes Logs API under `_logs` in 1.x.
-    # Keep opentelemetry-api/opentelemetry-sdk pinned to <2.0 for compatibility.
-    from opentelemetry._logs import LogRecord, SeverityNumber
+    # Build the SDK log record type (not API type), otherwise exporters may
+    # fail at serialization time expecting SDK fields such as `resource`.
+    from opentelemetry._logs import SeverityNumber
+    from opentelemetry import trace
+    from opentelemetry.trace import INVALID_SPAN_ID, INVALID_TRACE_ID, TraceFlags
+    from opentelemetry.sdk._logs import LogRecord
+
+    span_context = trace.get_current_span().get_span_context()
+    trace_id = INVALID_TRACE_ID
+    span_id = INVALID_SPAN_ID
+    trace_flags = TraceFlags(0x00)
+    if span_context is not None and getattr(span_context, "is_valid", False):
+        trace_id = span_context.trace_id
+        span_id = span_context.span_id
+        trace_flags = span_context.trace_flags
 
     return LogRecord(
+        timestamp=payload.get("timestamp_ns"),
+        trace_id=trace_id,
+        span_id=span_id,
+        trace_flags=trace_flags,
         body=payload.get("description", ""),
         severity_number=SeverityNumber.INFO,
         severity_text="INFO",
         attributes=_flatten_attributes(payload.get("attributes", {})),
-        timestamp=payload.get("timestamp_ns"),
     )
 
 

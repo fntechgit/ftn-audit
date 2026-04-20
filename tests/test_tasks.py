@@ -58,3 +58,8 @@ def test_emit_audit_log_task_stops_retry_after_max_retries(caplog):
 
 def test_emit_audit_log_task_ignores_result_backend():
     assert emit_audit_log_task.ignore_result is True
+
+
+def test_emit_audit_log_task_uses_late_ack_and_rejects_on_worker_lost():
+    assert emit_audit_log_task.acks_late is True
+    assert emit_audit_log_task.reject_on_worker_lost is True

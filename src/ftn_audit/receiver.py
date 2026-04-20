@@ -18,7 +18,10 @@ from ftn_audit.constants import (
     LOGGER_AUDIT,
 )
 from ftn_audit.formatter_factory import AuditLogFormatterFactory
-from ftn_audit.formatter_emitter import FormatterEmitter
+from ftn_audit.formatter_emitter import (
+    FormatterEmitter,
+    is_strict_formatter_validation_enabled,
+)
 from ftn_audit.registry import AuditFormattersRegistry
 
 logger = logging.getLogger(LOGGER_AUDIT)
@@ -83,8 +86,20 @@ def _post_save_receiver(sender, instance, created, **kwargs):
             failure_message="post_save audit failed for %s #%s",
             failure_args=(sender.__name__, getattr(instance, "pk", "?")),
         )
+    except TypeError:
+        if is_strict_formatter_validation_enabled():
+            raise
+        logger.exception(
+            "post_save audit preconditions failed for %s #%s",
+            sender.__name__,
+            getattr(instance, "pk", "?"),
+        )
     except Exception:
-        logger.exception("post_save audit preconditions failed for %s #%s", sender.__name__, getattr(instance, "pk", "?"))
+        logger.exception(
+            "post_save audit preconditions failed for %s #%s",
+            sender.__name__,
+            getattr(instance, "pk", "?"),
+        )
     finally:
         if hasattr(instance, _CHANGESET_ATTR):
             try:
@@ -142,8 +157,20 @@ def _post_delete_receiver(sender, instance, **kwargs):
             failure_message="post_delete audit failed for %s #%s",
             failure_args=(sender.__name__, getattr(instance, "pk", "?")),
         )
+    except TypeError:
+        if is_strict_formatter_validation_enabled():
+            raise
+        logger.exception(
+            "post_delete audit preconditions failed for %s #%s",
+            sender.__name__,
+            getattr(instance, "pk", "?"),
+        )
     except Exception:
-        logger.exception("post_delete audit preconditions failed for %s #%s", sender.__name__, getattr(instance, "pk", "?"))
+        logger.exception(
+            "post_delete audit preconditions failed for %s #%s",
+            sender.__name__,
+            getattr(instance, "pk", "?"),
+        )
 
 
 def connect_signals():

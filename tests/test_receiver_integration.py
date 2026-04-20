@@ -18,6 +18,11 @@ from ftn_audit import strategy as strategy_module
 from tests.test_app.models import AuditedBasket, AuditedThing, Tag
 
 
+class _InvalidFormatter:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+
 @pytest.mark.django_db(transaction=True)
 def test_create_model_emits_audit_event_after_commit(settings):
     settings.AUDIT_ENABLED = True
@@ -62,6 +67,26 @@ def test_update_model_emits_changeset_after_commit(settings):
     assert payload["attributes"]["audit.changeset"]["name"]["old"] == "old"
     assert payload["attributes"]["audit.changeset"]["name"]["new"] == "new"
 
+    set_current_audit_context(None)
+    AuditFormattersRegistry.reset()
+    strategy_module._strategy_instance = None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_strict_formatter_validation_raises_in_signal_path(settings):
+    settings.AUDIT_ENABLED = True
+    settings.AUDIT_STRICT_FORMATTER_VALIDATION = True
+    strategy_module._strategy_instance = None
+    AuditFormattersRegistry.reset()
+    AuditFormattersRegistry.register(AuditedThing, _InvalidFormatter)
+    set_current_audit_context(AuditContext(user_id=41, raw_route="POST|/v1/things/"))
+
+    with patch("ftn_audit.tasks.emit_audit_log_task.delay") as delay_mock:
+        with pytest.raises(TypeError, match="Invalid audit formatter instance"):
+            with transaction.atomic():
+                AuditedThing.objects.create(name="bad")
+
+    delay_mock.assert_not_called()
     set_current_audit_context(None)
     AuditFormattersRegistry.reset()
     strategy_module._strategy_instance = None

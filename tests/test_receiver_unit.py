@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from ftn_audit.context import AuditContext
 from ftn_audit.context_storage import set_current_audit_context, set_current_audit_request
 from ftn_audit.generic_formatters import GenericCreationFormatter
@@ -16,6 +18,11 @@ class _Instance:
 
 class _Model:
     __name__ = "DummyModel"
+
+
+class _InvalidFormatter:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
 
 
 def test_post_save_creation_emits_event(monkeypatch):
@@ -132,4 +139,19 @@ def test_pre_save_filters_changeset_to_update_fields(monkeypatch):
     assert getattr(instance, "_ftn_audit_pending_changeset") == {
         "name": {"old": "a", "new": "b"}
     }
+    AuditFormattersRegistry.reset()
+
+
+def test_strict_formatter_validation_propagates_from_post_save(settings):
+    settings.AUDIT_STRICT_FORMATTER_VALIDATION = True
+    AuditFormattersRegistry.reset()
+    AuditFormattersRegistry.register(_Model, formatter_cls=_InvalidFormatter)
+
+    set_current_audit_context(AuditContext(user_id=55, raw_route="POST|/v1/test/"))
+
+    with pytest.raises(TypeError, match="Invalid audit formatter instance"):
+        _post_save_receiver(sender=_Model, instance=_Instance(pk=12), created=True)
+
+    set_current_audit_context(None)
+    set_current_audit_request(None)
     AuditFormattersRegistry.reset()
