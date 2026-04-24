@@ -10,7 +10,10 @@ from asgiref.sync import iscoroutinefunction, markcoroutinefunction
 from django.http import HttpRequest, HttpResponse
 
 from ftn_audit.context import AuditContext
-from ftn_audit.context_storage import set_current_audit_context
+from ftn_audit.context_storage import (
+    set_current_audit_context,
+    set_current_audit_request,
+)
 
 logger = logging.getLogger("audit")
 
@@ -36,16 +39,20 @@ class AuditContextMiddleware:
     def __call__(self, request: HttpRequest):
         if self._is_async:
             return self.__acall__(request)
+        set_current_audit_request(request)
         try:
             return self.get_response(request)
         finally:
             set_current_audit_context(None)
+            set_current_audit_request(None)
 
     async def __acall__(self, request: HttpRequest) -> HttpResponse:
+        set_current_audit_request(request)
         try:
             return await self.get_response(request)
         finally:
             set_current_audit_context(None)
+            set_current_audit_request(None)
 
     def process_view(self, request: HttpRequest, view_func, view_args, view_kwargs):
         """Called after URL resolution — ``resolver_match`` is available."""

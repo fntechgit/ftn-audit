@@ -6,6 +6,7 @@ import logging
 
 from django.db.models.signals import post_delete, post_save, pre_save
 
+from ftn_audit.context_hydration import get_current_audit_context_with_user
 from ftn_audit.changeset import build_changeset
 from ftn_audit.constants import (
     DISPATCH_UID_POST_DELETE,
@@ -16,9 +17,11 @@ from ftn_audit.constants import (
     EVENT_UPDATE,
     LOGGER_AUDIT,
 )
-from ftn_audit.context_storage import get_current_audit_context
 from ftn_audit.formatter_factory import AuditLogFormatterFactory
-from ftn_audit.formatter_emitter import FormatterEmitter
+from ftn_audit.formatter_emitter import (
+    FormatterEmitter,
+    is_strict_formatter_validation_enabled,
+)
 from ftn_audit.registry import AuditFormattersRegistry
 
 logger = logging.getLogger(LOGGER_AUDIT)
@@ -54,7 +57,7 @@ def _post_save_receiver(sender, instance, created, **kwargs):
     if not AuditFormattersRegistry.has_model(sender):
         return
     try:
-        ctx = get_current_audit_context()
+        ctx = get_current_audit_context_with_user()
         if ctx is None:
             logger.debug(
                 "dropping post_save audit event due to missing context for %s #%s",
@@ -83,8 +86,20 @@ def _post_save_receiver(sender, instance, created, **kwargs):
             failure_message="post_save audit failed for %s #%s",
             failure_args=(sender.__name__, getattr(instance, "pk", "?")),
         )
+    except TypeError:
+        if is_strict_formatter_validation_enabled():
+            raise
+        logger.exception(
+            "post_save audit preconditions failed for %s #%s",
+            sender.__name__,
+            getattr(instance, "pk", "?"),
+        )
     except Exception:
-        logger.exception("post_save audit preconditions failed for %s #%s", sender.__name__, getattr(instance, "pk", "?"))
+        logger.exception(
+            "post_save audit preconditions failed for %s #%s",
+            sender.__name__,
+            getattr(instance, "pk", "?"),
+        )
     finally:
         if hasattr(instance, _CHANGESET_ATTR):
             try:
@@ -124,7 +139,7 @@ def _post_delete_receiver(sender, instance, **kwargs):
     if not AuditFormattersRegistry.has_model(sender):
         return
     try:
-        ctx = get_current_audit_context()
+        ctx = get_current_audit_context_with_user()
         if ctx is None:
             logger.debug(
                 "dropping post_delete audit event due to missing context for %s #%s",
@@ -142,8 +157,20 @@ def _post_delete_receiver(sender, instance, **kwargs):
             failure_message="post_delete audit failed for %s #%s",
             failure_args=(sender.__name__, getattr(instance, "pk", "?")),
         )
+    except TypeError:
+        if is_strict_formatter_validation_enabled():
+            raise
+        logger.exception(
+            "post_delete audit preconditions failed for %s #%s",
+            sender.__name__,
+            getattr(instance, "pk", "?"),
+        )
     except Exception:
-        logger.exception("post_delete audit preconditions failed for %s #%s", sender.__name__, getattr(instance, "pk", "?"))
+        logger.exception(
+            "post_delete audit preconditions failed for %s #%s",
+            sender.__name__,
+            getattr(instance, "pk", "?"),
+        )
 
 
 def connect_signals():

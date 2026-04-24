@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 from itertools import islice
-from typing import Optional, Set
+from typing import Set
 
 from django.db.models.signals import m2m_changed
 
+from ftn_audit.context_hydration import get_current_audit_context_with_user
 from ftn_audit.collections_registry import AuditCollectionsRegistry
 from ftn_audit.constants import (
     DISPATCH_UID_M2M_CHANGED,
@@ -18,9 +19,10 @@ from ftn_audit.constants import (
     M2M_ACTION_PRE_CLEAR,
     M2M_TRACKED_ACTIONS,
 )
-from ftn_audit.context import AuditContext
-from ftn_audit.context_storage import get_current_audit_context
-from ftn_audit.formatter_emitter import FormatterEmitter
+from ftn_audit.formatter_emitter import (
+    FormatterEmitter,
+    is_strict_formatter_validation_enabled,
+)
 from ftn_audit.generic_formatters import GenericCollectionUpdateFormatter
 
 logger = logging.getLogger(LOGGER_AUDIT_M2M)
@@ -35,7 +37,6 @@ def _cache_pre_clear_pk_set(instance, field_name: str) -> None:
         setattr(instance, _PRE_CLEAR_ATTR, cached)
 
     related_manager = getattr(instance, field_name)
-    # Keep snapshot bounded to avoid huge memory spikes on massive M2M clears.
     cached[field_name] = set(related_manager.values_list("pk", flat=True)[:M2M_PK_SET_MAX])
 
 
@@ -89,7 +90,7 @@ def _m2m_changed_receiver(sender, instance, action, pk_set, model, reverse=False
         pk_set = _cap_pk_set(pk_set)
 
     try:
-        ctx: Optional[AuditContext] = get_current_audit_context()
+        ctx = get_current_audit_context_with_user()
         if ctx is None:
             logger.debug(
                 "dropping m2m audit event due to missing context for %s.%s (%s)",
@@ -117,8 +118,22 @@ def _m2m_changed_receiver(sender, instance, action, pk_set, model, reverse=False
             failure_message="m2m audit failed for %s.%s (%s)",
             failure_args=(type(instance).__name__, rule.field_name, action),
         )
+    except TypeError:
+        if is_strict_formatter_validation_enabled():
+            raise
+        logger.exception(
+            "m2m audit preconditions failed for %s.%s (%s)",
+            type(instance).__name__,
+            rule.field_name,
+            action,
+        )
     except Exception:
-        logger.exception("m2m audit preconditions failed for %s.%s (%s)", type(instance).__name__, rule.field_name, action)
+        logger.exception(
+            "m2m audit preconditions failed for %s.%s (%s)",
+            type(instance).__name__,
+            rule.field_name,
+            action,
+        )
 
 
 def connect_m2m_signals():
