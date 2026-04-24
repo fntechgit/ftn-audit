@@ -51,8 +51,7 @@ def test_super_get_attributes_is_safe():
     assert attrs["custom"] == "yes"
 
 
-def test_invalid_formatter_raises_actionable_error(settings):
-    settings.AUDIT_STRICT_FORMATTER_VALIDATION = True
+def test_invalid_formatter_raises_actionable_error():
     AuditFormattersRegistry.reset()
     AuditFormattersRegistry.register(_Instance, _InvalidFormatter)
 

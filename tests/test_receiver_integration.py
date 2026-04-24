@@ -75,7 +75,6 @@ def test_update_model_emits_changeset_after_commit(settings):
 @pytest.mark.django_db(transaction=True)
 def test_strict_formatter_validation_raises_in_signal_path(settings):
     settings.AUDIT_ENABLED = True
-    settings.AUDIT_STRICT_FORMATTER_VALIDATION = True
     strategy_module._strategy_instance = None
     AuditFormattersRegistry.reset()
     AuditFormattersRegistry.register(AuditedThing, _InvalidFormatter)
