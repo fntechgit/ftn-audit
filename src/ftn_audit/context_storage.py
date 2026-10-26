@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from contextvars import ContextVar
-from typing import Optional
+from contextvars import ContextVar, Token
+from typing import Optional, Tuple
 
 from django.http import HttpRequest
 
@@ -31,3 +31,18 @@ def set_current_audit_request(request: Optional[HttpRequest]) -> None:
 
 def get_current_audit_request() -> Optional[HttpRequest]:
     return _audit_request_var.get()
+
+
+AuditScopeTokens = Tuple[Token[Optional[AuditContext]], Token[Optional[HttpRequest]]]
+
+
+def enter_audit_scope(ctx: AuditContext) -> AuditScopeTokens:
+    """Make ``ctx`` current with no request; return the tokens to undo it."""
+    return _audit_context_var.set(ctx), _audit_request_var.set(None)
+
+
+def exit_audit_scope(tokens: AuditScopeTokens) -> None:
+    """Restore the context and request that were current before ``enter_audit_scope``."""
+    context_token, request_token = tokens
+    _audit_request_var.reset(request_token)
+    _audit_context_var.reset(context_token)

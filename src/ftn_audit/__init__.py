@@ -13,6 +13,12 @@ from ftn_audit.base_formatter import (
     IAuditLogFormatter,
 )
 from ftn_audit.context import AuditContext
+from ftn_audit.scope import (
+    audit_context,
+    audit_context_from_snapshot,
+    snapshot_current_audit_context,
+    system_audit_context,
+)
 from ftn_audit.strategy import reset_audit_strategy
 
 __all__ = [
@@ -23,5 +29,9 @@ __all__ = [
     "AbstractAuditLogFormatter",
     "IAuditLogFormatter",
     "AuditContext",
+    "audit_context",
+    "system_audit_context",
+    "snapshot_current_audit_context",
+    "audit_context_from_snapshot",
     "reset_audit_strategy",
 ]

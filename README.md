@@ -85,6 +85,39 @@ AUDIT_AUTO_DISCOVER_FORMATTERS = True  # optional, default True
 AUDIT_CHANGESET_CHECK_RELATIONSHIP = True  # optional, include FK changes in changeset
 ```
 
+### 5) Audit writes made outside a request
+
+Receivers drop every event that has no audit context, and only the middleware sets one.
+Scheduled jobs, Celery tasks and message consumers must open one explicitly:
+
+```python
+from ftn_audit import (
+    audit_context,
+    audit_context_from_snapshot,
+    snapshot_current_audit_context,
+    system_audit_context,
+)
+
+# A job or consumer acting on its own: events carry raw_route "SYSTEM|job:reopen_carts".
+with system_audit_context("job:reopen_carts"):
+    reopen_carts()
+
+# Also usable as a decorator.
+@system_audit_context("consumer:summit_updated")
+def handle(event): ...
+
+# A Celery task acting on behalf of the user who triggered it.
+cleanup_task.delay(cart_id, audit=snapshot_current_audit_context())
+
+def cleanup(cart_id, audit=None):
+    ctx = audit_context_from_snapshot(audit)
+    with audit_context(ctx) if ctx else system_audit_context("task:cleanup"):
+        ...
+```
+
+Both helpers restore the previous context on exit and hide the current request inside the block,
+so actor hydration never attributes these writes to an unrelated request's user.
+
 ## Migration notes
 
 - Foreign-key auditing:
@@ -117,7 +150,8 @@ AUDIT_CHANGESET_CHECK_RELATIONSHIP = True  # optional, include FK changes in cha
 ## Known limitations
 
 - ContextVars do not cross process boundaries (e.g. Celery workers).
-  For background jobs, pass actor metadata explicitly and set `AuditContext` in task scope.
+  Pass `snapshot_current_audit_context()` to the task and restore it with `audit_context()`,
+  or run the task under `system_audit_context()` (see "Audit writes made outside a request").
 - `AUDIT_OTLP_FALLBACK` is reserved but not currently enforced by runtime behavior.
 - Django bulk operations bypass per-instance signals (`bulk_create`, `bulk_update`, queryset `update`, queryset `delete`).
   If needed, add explicit auditing at service-layer boundaries.
