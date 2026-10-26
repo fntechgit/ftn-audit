@@ -8,47 +8,93 @@ their work in one of these helpers so their writes are audited too.
 from __future__ import annotations
 
 import dataclasses
+import functools
+import inspect
 import uuid
-from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Optional, TypeVar, cast
 
 from ftn_audit.constants import SYSTEM_RAW_ROUTE_METHOD
 from ftn_audit.context import AuditContext
 from ftn_audit.context_hydration import get_current_audit_context_with_user
-from ftn_audit.context_storage import enter_audit_scope, exit_audit_scope
+from ftn_audit.context_storage import AuditScopeTokens, enter_audit_scope, exit_audit_scope
+
+F = TypeVar("F", bound=Callable[..., Any])
 
 
-@contextmanager
-def audit_context(context: AuditContext) -> Iterator[AuditContext]:
-    """Run the block under ``context``, then restore whatever was active before.
+class AuditScope:
+    """Context manager and decorator that makes an ``AuditContext`` current.
 
-    The current request is hidden for the duration of the block, so actor
-    hydration cannot attribute these writes to an unrelated request's user.
-    Usable as a context manager or as a decorator.
+    The context is built on every entry, so a decorated function gets a fresh
+    one per call. Decorated coroutine functions keep the scope across ``await``
+    (a plain ``ContextDecorator`` would close it before the body runs).
     """
-    tokens = enter_audit_scope(context)
-    try:
-        yield context
-    finally:
-        exit_audit_scope(tokens)
+
+    def __init__(self, make_context: Callable[[], AuditContext]) -> None:
+        self._make_context = make_context
+        self._tokens: Optional[AuditScopeTokens] = None
+
+    def __enter__(self) -> AuditContext:
+        context = self._make_context()
+        self._tokens = enter_audit_scope(context)
+        return context
+
+    def __exit__(self, *exc_info: Any) -> None:
+        if self._tokens is not None:
+            exit_audit_scope(self._tokens)
+            self._tokens = None
+
+    def __call__(self, func: F) -> F:
+        make_context = self._make_context
+
+        if inspect.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                with AuditScope(make_context):
+                    return await func(*args, **kwargs)
+
+            return cast(F, async_wrapper)
+
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            with AuditScope(make_context):
+                return func(*args, **kwargs)
+
+        return cast(F, wrapper)
 
 
-@contextmanager
-def system_audit_context(source: str, **fields: Any) -> Iterator[AuditContext]:
-    """Run the block as the system actor ``source`` (e.g. ``"job:reopen_carts"``).
+def audit_context(context: AuditContext) -> AuditScope:
+    """Run the block (or decorated function) under ``context``, then restore the previous one.
 
-    Events carry ``raw_route = "SYSTEM|<source>"``, which identifies the job or
-    task in the audit trail and lets formatters register for it like any route.
-    Extra ``AuditContext`` fields (e.g. ``trace_id``) can be passed as keywords.
+    The current request is hidden for the duration, so actor hydration cannot
+    attribute these writes to an unrelated request's user.
     """
-    context = AuditContext(
+    return AuditScope(lambda: context)
+
+
+def system_audit_context(
+    source: str,
+    *,
+    trace_id: Optional[str] = None,
+    ui_app: Optional[str] = None,
+    ui_flow: Optional[str] = None,
+) -> AuditScope:
+    """Run the block (or decorated function) as the system actor ``source``.
+
+    ``source`` names the job, task or consumer (e.g. ``"job:reopen_carts"``).
+    Events carry ``raw_route = "SYSTEM|<source>"``, which identifies it in the
+    audit trail and lets formatters register for it like any route, and a fresh
+    ``request_id`` per entry. Only request metadata can be added: code acting
+    on behalf of a user should use ``audit_context()`` with that user instead.
+    """
+    raw_route = f"{SYSTEM_RAW_ROUTE_METHOD}|{source}"
+    return AuditScope(lambda: AuditContext(
         route=source,
-        raw_route=f"{SYSTEM_RAW_ROUTE_METHOD}|{source}",
+        raw_route=raw_route,
         request_id=str(uuid.uuid4()),
-        **fields,
-    )
-    with audit_context(context) as active:
-        yield active
+        trace_id=trace_id,
+        ui_app=ui_app,
+        ui_flow=ui_flow,
+    ))
 
 
 def snapshot_current_audit_context() -> Optional[Dict[str, Any]]:

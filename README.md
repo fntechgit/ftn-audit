@@ -91,6 +91,7 @@ Receivers drop every event that has no audit context, and only the middleware se
 Scheduled jobs, Celery tasks and message consumers must open one explicitly:
 
 ```python
+from celery import shared_task
 from ftn_audit import (
     audit_context,
     audit_context_from_snapshot,
@@ -102,21 +103,25 @@ from ftn_audit import (
 with system_audit_context("job:reopen_carts"):
     reopen_carts()
 
-# Also usable as a decorator.
+# Also usable as a decorator, on plain and on async functions.
 @system_audit_context("consumer:summit_updated")
 def handle(event): ...
 
 # A Celery task acting on behalf of the user who triggered it.
-cleanup_task.delay(cart_id, audit=snapshot_current_audit_context())
-
-def cleanup(cart_id, audit=None):
+@shared_task
+def cleanup_task(cart_id, audit=None):
     ctx = audit_context_from_snapshot(audit)
     with audit_context(ctx) if ctx else system_audit_context("task:cleanup"):
         ...
+
+# In the request that triggers it:
+cleanup_task.delay(cart_id, audit=snapshot_current_audit_context())
 ```
 
 Both helpers restore the previous context on exit and hide the current request inside the block,
 so actor hydration never attributes these writes to an unrelated request's user.
+`system_audit_context()` only accepts request metadata (`trace_id`, `ui_app`, `ui_flow`) besides
+the source; to act as a user, use `audit_context()` with that user's context.
 
 ## Migration notes
 
