@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import patch
 
 import pytest
@@ -102,6 +103,36 @@ def test_system_audit_context_works_as_a_decorator():
     assert job().raw_route == f"SYSTEM|{JOB_SOURCE}"
     assert job().request_id != job().request_id
     assert get_current_audit_context() is None
+
+
+def test_decorated_coroutine_keeps_the_scope_across_await():
+    # A plain ContextDecorator would close the scope as soon as the coroutine object is returned.
+    @system_audit_context(JOB_SOURCE)
+    async def system_handler():
+        await asyncio.sleep(0)
+        return get_current_audit_context()
+
+    @audit_context(REQUEST_CONTEXT)
+    async def user_handler():
+        await asyncio.sleep(0)
+        return get_current_audit_context()
+
+    assert asyncio.run(system_handler()).raw_route == f"SYSTEM|{JOB_SOURCE}"
+    assert asyncio.run(user_handler()) is REQUEST_CONTEXT
+    assert get_current_audit_context() is None
+
+
+def test_system_audit_context_accepts_request_metadata():
+    with system_audit_context(JOB_SOURCE, trace_id="abc", ui_app="admin", ui_flow="sync") as ctx:
+        assert (ctx.trace_id, ctx.ui_app, ctx.ui_flow) == ("abc", "admin", "sync")
+
+
+@pytest.mark.parametrize("field", ["user_id", "user_email", "raw_route", "route", "request_id"])
+def test_system_audit_context_rejects_actor_and_route_fields(field):
+    # A system event must not also name a user, and its route/request_id are owned by the helper.
+    # Code acting for a user should use audit_context() instead.
+    with pytest.raises(TypeError):
+        system_audit_context(JOB_SOURCE, **{field: 1})
 
 
 def test_snapshot_round_trips_the_hydrated_context():
