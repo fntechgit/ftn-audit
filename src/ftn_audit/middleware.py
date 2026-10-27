@@ -14,6 +14,7 @@ from ftn_audit.context_storage import (
     set_current_audit_context,
     set_current_audit_request,
 )
+from ftn_audit.tracing import get_current_trace_id
 
 logger = logging.getLogger("audit")
 
@@ -156,13 +157,4 @@ class AuditContextMiddleware:
 
     @staticmethod
     def _get_trace_id() -> Optional[str]:
-        try:
-            from opentelemetry import trace
-
-            span = trace.get_current_span()
-            ctx = span.get_span_context()
-            if ctx and ctx.trace_id:
-                return format(ctx.trace_id, "032x")
-        except Exception:
-            pass
-        return None
+        return get_current_trace_id()

@@ -206,9 +206,59 @@ def test_decorating_a_generator_function_is_rejected():
         audit_context(REQUEST_CONTEXT)(agen)
 
 
+def test_decorating_a_generator_function_behind_a_wraps_wrapper_is_rejected():
+    # @inject_job-style wrappers expose the generator through __wrapped__; the
+    # guard must look through them like it does for coroutine functions.
+    def gen():
+        yield
+
+    @functools.wraps(gen)
+    def sync_wrapper(*args, **kwargs):
+        return gen(*args, **kwargs)
+
+    with pytest.raises(TypeError, match="generator function"):
+        system_audit_context(JOB_SOURCE)(sync_wrapper)
+
+
+def test_sync_wrapper_returning_a_generator_without_wrapped_is_rejected():
+    # Without __wrapped__ the generator cannot be detected up front; the scope is
+    # already closed when the generator object comes back, so iterating it would
+    # run the body with no context. Fail loudly instead.
+    def gen():
+        yield get_current_audit_context()
+
+    def opaque_wrapper():
+        return gen()
+
+    decorated = system_audit_context(JOB_SOURCE)(opaque_wrapper)
+
+    with pytest.raises(TypeError, match="returned a generator"):
+        decorated()
+    assert get_current_audit_context() is None
+
+
 def test_system_audit_context_accepts_request_metadata():
     with system_audit_context(JOB_SOURCE, trace_id="abc", ui_app="admin", ui_flow="sync") as ctx:
         assert (ctx.trace_id, ctx.ui_app, ctx.ui_flow) == ("abc", "admin", "sync")
+
+
+def test_system_audit_context_takes_the_trace_id_from_the_active_span():
+    # Jobs run under a tracing span (purchases-api's @traced_job); like the
+    # middleware, the helper correlates its events with that span unless a
+    # trace_id is given explicitly.
+    from opentelemetry.sdk.trace import TracerProvider
+
+    tracer = TracerProvider().get_tracer("tests")
+
+    with tracer.start_as_current_span("job reopen") as span:
+        expected = format(span.get_span_context().trace_id, "032x")
+        with system_audit_context(JOB_SOURCE) as ctx:
+            assert ctx.trace_id == expected
+        with system_audit_context(JOB_SOURCE, trace_id="explicit") as ctx:
+            assert ctx.trace_id == "explicit"
+
+    with system_audit_context(JOB_SOURCE) as ctx:
+        assert ctx.trace_id is None
 
 
 @pytest.mark.parametrize("field", ["user_id", "user_email", "raw_route", "route", "request_id"])

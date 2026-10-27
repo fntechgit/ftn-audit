@@ -104,7 +104,8 @@ with system_audit_context("job:reopen_carts"):
     reopen_carts()
 
 # Also usable as a decorator, on plain and on async functions (not on generator
-# functions: decorating one raises TypeError; open the scope inside the body instead).
+# functions, even behind another decorator: that raises TypeError; open the scope
+# inside the body instead).
 @system_audit_context("consumer:summit_updated")
 def handle(event): ...
 
@@ -122,7 +123,9 @@ cleanup_task.delay(cart_id, audit=snapshot_current_audit_context())
 Both helpers restore the previous context on exit and hide the current request inside the block,
 so actor hydration never attributes these writes to an unrelated request's user.
 `system_audit_context()` only accepts request metadata (`trace_id`, `ui_app`, `ui_flow`) besides
-the source; to act as a user, use `audit_context()` with that user's context.
+the source; to act as a user, use `audit_context()` with that user's context. When `trace_id` is
+not given it is taken from the OpenTelemetry span active on entry, so a job run under a tracing
+span gets its events correlated with it, as request events are.
 
 ## Migration notes
 

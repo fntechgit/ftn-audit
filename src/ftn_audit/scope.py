@@ -17,6 +17,7 @@ from ftn_audit.constants import SYSTEM_RAW_ROUTE_METHOD
 from ftn_audit.context import AuditContext
 from ftn_audit.context_hydration import get_current_audit_context_with_user
 from ftn_audit.context_storage import enter_audit_scope, exit_audit_scope
+from ftn_audit.tracing import get_current_trace_id
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -29,9 +30,10 @@ class AuditScope:
     re-entered or shared between tasks and threads. Decorated coroutine
     functions keep the scope across ``await`` (a plain ``ContextDecorator``
     would close it before the body runs), also behind ``functools.wraps``
-    wrappers. Generator functions, and sync wrappers that hide a coroutine
-    without ``__wrapped__``, are rejected with ``TypeError``: the scope would
-    close before the body runs, dropping its writes silently.
+    wrappers. Generator functions (also behind wrappers), and sync wrappers
+    that hide a coroutine or generator without ``__wrapped__``, are rejected
+    with ``TypeError``: the scope would close before the body runs, dropping
+    its writes silently.
     """
 
     def __init__(self, make_context: Callable[[], AuditContext]) -> None:
@@ -48,15 +50,21 @@ class AuditScope:
     def __call__(self, func: F) -> F:
         make_context = self._make_context
 
-        if inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(func):
+        # Follow ``__wrapped__`` so a coroutine or generator function behind a
+        # sync wrapper (e.g. ``@inject_job``) is still recognized.
+        target = inspect.unwrap(func)
+
+        if any(
+            check(candidate)
+            for candidate in (func, target)
+            for check in (inspect.isgeneratorfunction, inspect.isasyncgenfunction)
+        ):
             raise TypeError(
                 f"{getattr(func, '__qualname__', func)!r} is a generator function; an audit scope "
                 "cannot decorate it. Open the scope with a `with` block inside the generator instead."
             )
 
-        # Follow ``__wrapped__`` so a coroutine function behind a sync wrapper
-        # (e.g. ``@inject_job``) still gets the async path.
-        if inspect.iscoroutinefunction(inspect.unwrap(func)):
+        if inspect.iscoroutinefunction(target):
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 with AuditScope(make_context):
@@ -68,19 +76,30 @@ class AuditScope:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             with AuditScope(make_context):
                 result = func(*args, **kwargs)
-            if inspect.isawaitable(result):
-                # A wrapper without ``__wrapped__`` hid a coroutine: the scope is
-                # already closed, so fail loudly instead of dropping its writes.
+            deferred = _deferred_result_kind(result)
+            if deferred is not None:
+                # A wrapper without ``__wrapped__`` hid a coroutine or generator:
+                # the scope is already closed before its body runs, so fail
+                # loudly instead of dropping its writes.
                 close = getattr(result, "close", None)
                 if callable(close):
                     close()
                 raise TypeError(
-                    f"{getattr(func, '__qualname__', func)!r} returned an awaitable; decorate the "
-                    "coroutine function directly or open the scope inside it."
+                    f"{getattr(func, '__qualname__', func)!r} returned {deferred}; decorate the "
+                    "coroutine or generator function directly or open the scope inside it."
                 )
             return result
 
         return cast(F, wrapper)
+
+
+def _deferred_result_kind(result: Any) -> Optional[str]:
+    """Name the kind of lazily-executed object ``result`` is, or ``None`` for a plain value."""
+    if inspect.isawaitable(result):
+        return "an awaitable"
+    if inspect.isgenerator(result) or inspect.isasyncgen(result):
+        return "a generator"
+    return None
 
 
 def audit_context(context: AuditContext) -> AuditScope:
@@ -104,15 +123,17 @@ def system_audit_context(
     ``source`` names the job, task or consumer (e.g. ``"job:reopen_carts"``).
     Events carry ``raw_route = "SYSTEM|<source>"``, which identifies it in the
     audit trail and lets formatters register for it like any route, and a fresh
-    ``request_id`` per entry. Only request metadata can be added: code acting
-    on behalf of a user should use ``audit_context()`` with that user instead.
+    ``request_id`` per entry. ``trace_id`` defaults to the OpenTelemetry span
+    active when the scope is entered, like the middleware does for requests.
+    Only request metadata can be added: code acting on behalf of a user should
+    use ``audit_context()`` with that user instead.
     """
     raw_route = f"{SYSTEM_RAW_ROUTE_METHOD}|{source}"
     return AuditScope(lambda: AuditContext(
         route=source,
         raw_route=raw_route,
         request_id=str(uuid.uuid4()),
-        trace_id=trace_id,
+        trace_id=trace_id if trace_id is not None else get_current_trace_id(),
         ui_app=ui_app,
         ui_flow=ui_flow,
     ))
