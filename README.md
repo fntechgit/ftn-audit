@@ -103,7 +103,8 @@ from ftn_audit import (
 with system_audit_context("job:reopen_carts"):
     reopen_carts()
 
-# Also usable as a decorator, on plain and on async functions.
+# Also usable as a decorator, on plain and on async functions (not on generator
+# functions: decorating one raises TypeError; open the scope inside the body instead).
 @system_audit_context("consumer:summit_updated")
 def handle(event): ...
 

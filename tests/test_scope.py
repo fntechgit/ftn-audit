@@ -122,6 +122,56 @@ def test_decorated_coroutine_keeps_the_scope_across_await():
     assert get_current_audit_context() is None
 
 
+def test_reentering_the_same_scope_instance_restores_the_outer_state():
+    # Per-entry state must not live on the instance: the inner exit would
+    # otherwise swallow the outer one, leaving the system context and the
+    # hidden request in place after the outer block ends.
+    request = _RequestWithAuthUser()
+    set_current_audit_request(request)
+    set_current_audit_context(REQUEST_CONTEXT)
+    scope = system_audit_context(JOB_SOURCE)
+
+    with scope as outer:
+        with scope as inner:
+            assert get_current_audit_context() is inner
+        assert get_current_audit_context() is outer
+        assert get_current_audit_request() is None
+
+    assert get_current_audit_context() is REQUEST_CONTEXT
+    assert get_current_audit_request() is request
+
+
+def test_one_scope_instance_can_be_shared_by_concurrent_tasks():
+    # Each task exits with the tokens of its own context, whichever finishes first.
+    scope = system_audit_context(JOB_SOURCE)
+
+    async def worker(delay):
+        with scope as ctx:
+            await asyncio.sleep(delay)
+            return get_current_audit_context() is ctx
+
+    async def main():
+        return await asyncio.gather(worker(0), worker(0.01))
+
+    assert asyncio.run(main()) == [True, True]
+    assert get_current_audit_context() is None
+
+
+def test_decorating_a_generator_function_is_rejected():
+    # The sync wrapper would exit the scope as soon as the generator object is
+    # returned, so the body would run without a context and its writes be dropped.
+    def gen():
+        yield
+
+    async def agen():
+        yield
+
+    with pytest.raises(TypeError, match="generator function"):
+        system_audit_context(JOB_SOURCE)(gen)
+    with pytest.raises(TypeError, match="generator function"):
+        audit_context(REQUEST_CONTEXT)(agen)
+
+
 def test_system_audit_context_accepts_request_metadata():
     with system_audit_context(JOB_SOURCE, trace_id="abc", ui_app="admin", ui_flow="sync") as ctx:
         assert (ctx.trace_id, ctx.ui_app, ctx.ui_flow) == ("abc", "admin", "sync")

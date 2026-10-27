@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, Optional, TypeVar, cast
 from ftn_audit.constants import SYSTEM_RAW_ROUTE_METHOD
 from ftn_audit.context import AuditContext
 from ftn_audit.context_hydration import get_current_audit_context_with_user
-from ftn_audit.context_storage import AuditScopeTokens, enter_audit_scope, exit_audit_scope
+from ftn_audit.context_storage import enter_audit_scope, exit_audit_scope
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -25,26 +25,32 @@ class AuditScope:
     """Context manager and decorator that makes an ``AuditContext`` current.
 
     The context is built on every entry, so a decorated function gets a fresh
-    one per call. Decorated coroutine functions keep the scope across ``await``
-    (a plain ``ContextDecorator`` would close it before the body runs).
+    one per call. The scope keeps no per-entry state, so one instance can be
+    re-entered or shared between tasks and threads. Decorated coroutine
+    functions keep the scope across ``await`` (a plain ``ContextDecorator``
+    would close it before the body runs). Generator functions are rejected:
+    the scope would close before the body runs, dropping its writes silently.
     """
 
     def __init__(self, make_context: Callable[[], AuditContext]) -> None:
         self._make_context = make_context
-        self._tokens: Optional[AuditScopeTokens] = None
 
     def __enter__(self) -> AuditContext:
         context = self._make_context()
-        self._tokens = enter_audit_scope(context)
+        enter_audit_scope(context)
         return context
 
     def __exit__(self, *exc_info: Any) -> None:
-        if self._tokens is not None:
-            exit_audit_scope(self._tokens)
-            self._tokens = None
+        exit_audit_scope()
 
     def __call__(self, func: F) -> F:
         make_context = self._make_context
+
+        if inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(func):
+            raise TypeError(
+                f"{getattr(func, '__qualname__', func)!r} is a generator function; an audit scope "
+                "cannot decorate it. Open the scope with a `with` block inside the generator instead."
+            )
 
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)
