@@ -19,6 +19,8 @@ ftn-audit/
     context_storage.py      # contextvars-based storage for context + request (ASGI-safe)
     context_hydration.py    # Late actor hydration helper from request.user when needed
     middleware.py            # AuditContextMiddleware — populates context per request
+    scope.py                # audit_context()/system_audit_context() scopes + snapshot helpers for jobs, tasks, consumers
+    tracing.py              # get_current_trace_id() from the active OTel span (middleware + scopes)
     changeset.py            # build_changeset() using django-dirtyfields
     serialization.py        # make_json_safe() recursive converter for Celery payloads
     registry.py             # AuditFormattersRegistry + @register_audit_formatter
@@ -35,7 +37,7 @@ ftn-audit/
 
 ## How It Works
 
-1. `AuditContextMiddleware` stores request contextvars and captures user/request info
+1. `AuditContextMiddleware` stores request contextvars and captures user/request info. Outside a request (runjobs, Celery tasks, consumers) nothing sets a context and receivers drop every event, so that code opens one with `system_audit_context("job:<name>")` or `audit_context(ctx)` from `scope.py`
 2. `pre_save` receiver captures dirty-field changeset before DB write
 3. `post_save` / `post_delete` / `m2m_changed` receivers hydrate missing actor from `request.user` and format events
 4. Formatter is resolved: registry lookup (model + route + event) → generic fallback
