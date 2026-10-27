@@ -28,8 +28,10 @@ class AuditScope:
     one per call. The scope keeps no per-entry state, so one instance can be
     re-entered or shared between tasks and threads. Decorated coroutine
     functions keep the scope across ``await`` (a plain ``ContextDecorator``
-    would close it before the body runs). Generator functions are rejected:
-    the scope would close before the body runs, dropping its writes silently.
+    would close it before the body runs), also behind ``functools.wraps``
+    wrappers. Generator functions, and sync wrappers that hide a coroutine
+    without ``__wrapped__``, are rejected with ``TypeError``: the scope would
+    close before the body runs, dropping its writes silently.
     """
 
     def __init__(self, make_context: Callable[[], AuditContext]) -> None:
@@ -52,7 +54,9 @@ class AuditScope:
                 "cannot decorate it. Open the scope with a `with` block inside the generator instead."
             )
 
-        if inspect.iscoroutinefunction(func):
+        # Follow ``__wrapped__`` so a coroutine function behind a sync wrapper
+        # (e.g. ``@inject_job``) still gets the async path.
+        if inspect.iscoroutinefunction(inspect.unwrap(func)):
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 with AuditScope(make_context):
@@ -63,7 +67,18 @@ class AuditScope:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             with AuditScope(make_context):
-                return func(*args, **kwargs)
+                result = func(*args, **kwargs)
+            if inspect.isawaitable(result):
+                # A wrapper without ``__wrapped__`` hid a coroutine: the scope is
+                # already closed, so fail loudly instead of dropping its writes.
+                close = getattr(result, "close", None)
+                if callable(close):
+                    close()
+                raise TypeError(
+                    f"{getattr(func, '__qualname__', func)!r} returned an awaitable; decorate the "
+                    "coroutine function directly or open the scope inside it."
+                )
+            return result
 
         return cast(F, wrapper)
 

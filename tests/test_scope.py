@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 from unittest.mock import patch
 
 import pytest
@@ -154,6 +155,39 @@ def test_one_scope_instance_can_be_shared_by_concurrent_tasks():
         return await asyncio.gather(worker(0), worker(0.01))
 
     assert asyncio.run(main()) == [True, True]
+    assert get_current_audit_context() is None
+
+
+def test_decorated_coroutine_behind_a_wraps_wrapper_keeps_the_scope():
+    # Decorator stacks such as @system_audit_context over @inject_job hand the
+    # scope a sync wrapper; it must still detect the coroutine underneath.
+    async def handler():
+        await asyncio.sleep(0)
+        return get_current_audit_context()
+
+    @functools.wraps(handler)
+    def sync_wrapper(*args, **kwargs):
+        return handler(*args, **kwargs)
+
+    decorated = system_audit_context(JOB_SOURCE)(sync_wrapper)
+
+    assert asyncio.run(decorated()).raw_route == f"SYSTEM|{JOB_SOURCE}"
+    assert get_current_audit_context() is None
+
+
+def test_sync_wrapper_hiding_a_coroutine_without_wrapped_is_rejected():
+    # Without __wrapped__ the coroutine cannot be detected up front and the
+    # scope is already closed when the awaitable comes back: fail loudly.
+    async def handler():
+        return None
+
+    def opaque_wrapper():
+        return handler()
+
+    decorated = system_audit_context(JOB_SOURCE)(opaque_wrapper)
+
+    with pytest.raises(TypeError, match="returned an awaitable"):
+        decorated()
     assert get_current_audit_context() is None
 
 
