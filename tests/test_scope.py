@@ -5,6 +5,7 @@ import functools
 from unittest.mock import patch
 
 import pytest
+from asgiref.sync import sync_to_async
 from django.db import transaction
 
 from ftn_audit import (
@@ -173,6 +174,23 @@ def test_decorated_coroutine_behind_a_wraps_wrapper_keeps_the_scope():
 
     assert asyncio.run(decorated()).raw_route == f"SYSTEM|{JOB_SOURCE}"
     assert get_current_audit_context() is None
+
+
+def test_decorated_async_wrapper_over_a_sync_target_keeps_the_scope():
+    # sync_to_async(handler) is a coroutine function whose __wrapped__ is the
+    # sync handler; the async path must be chosen from the outer callable too,
+    # not only from the unwrapped target.
+    def handler():
+        return get_current_audit_context()
+
+    @functools.wraps(handler)
+    async def async_wrapper(*args, **kwargs):
+        return await sync_to_async(handler)(*args, **kwargs)
+
+    for func in (async_wrapper, sync_to_async(handler)):
+        decorated = system_audit_context(JOB_SOURCE)(func)
+        assert asyncio.run(decorated()).raw_route == f"SYSTEM|{JOB_SOURCE}"
+        assert get_current_audit_context() is None
 
 
 def test_sync_wrapper_hiding_a_coroutine_without_wrapped_is_rejected():

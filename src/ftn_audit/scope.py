@@ -64,7 +64,10 @@ class AuditScope:
                 "cannot decorate it. Open the scope with a `with` block inside the generator instead."
             )
 
-        if inspect.iscoroutinefunction(target):
+        # Either side may be the coroutine function: a sync wrapper over an
+        # ``async def``, or an ``async def`` wrapper (``sync_to_async``) over a
+        # sync target.
+        if inspect.iscoroutinefunction(func) or inspect.iscoroutinefunction(target):
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 with AuditScope(make_context):
