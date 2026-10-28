@@ -110,7 +110,17 @@ def audit_context(context: AuditContext) -> AuditScope:
 
     The current request is hidden for the duration, so actor hydration cannot
     attribute these writes to an unrelated request's user.
+
+    Anything but an ``AuditContext`` (a ``None`` snapshot included) raises
+    ``TypeError``: entering a scope with no context would hide the request and
+    drop every write in the block silently. Fall back to
+    ``system_audit_context()`` when there is no snapshot to restore.
     """
+    if not isinstance(context, AuditContext):
+        raise TypeError(
+            f"audit_context() expects an AuditContext, got {type(context).__name__}; "
+            "without a snapshot to restore, run the block under system_audit_context() instead."
+        )
     return AuditScope(lambda: context)
 
 

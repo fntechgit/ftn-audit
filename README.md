@@ -122,6 +122,8 @@ cleanup_task.delay(cart_id, audit=snapshot_current_audit_context())
 
 Both helpers restore the previous context on exit and hide the current request inside the block,
 so actor hydration never attributes these writes to an unrelated request's user.
+`audit_context()` raises `TypeError` for anything but an `AuditContext`, a `None` snapshot included,
+so a task that received no snapshot falls back to `system_audit_context()` as in the example above.
 `system_audit_context()` only accepts request metadata (`trace_id`, `ui_app`, `ui_flow`) besides
 the source; to act as a user, use `audit_context()` with that user's context. When `trace_id` is
 not given it is taken from the OpenTelemetry span active on entry, so a job run under a tracing

@@ -312,6 +312,20 @@ def test_audit_context_from_snapshot_ignores_unknown_keys():
     assert restored == AuditContext(user_id=3)
 
 
+@pytest.mark.parametrize("not_a_context", [None, {"user_id": 3}])
+def test_audit_context_rejects_anything_but_an_audit_context(not_a_context):
+    # audit_context(audit_context_from_snapshot(None)) would otherwise enter a
+    # scope with no context (and hide the request), so every write in the block
+    # is dropped with only a debug log; a raw snapshot dict passed by mistake
+    # would do the same. Fail loudly: callers fall back to system_audit_context().
+    set_current_audit_context(REQUEST_CONTEXT)
+
+    with pytest.raises(TypeError, match="AuditContext"):
+        audit_context(not_a_context)
+
+    assert get_current_audit_context() is REQUEST_CONTEXT
+
+
 @pytest.mark.django_db(transaction=True)
 def test_write_outside_a_request_is_dropped_without_a_context(settings):
     settings.AUDIT_ENABLED = True
