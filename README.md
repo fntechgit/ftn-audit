@@ -85,6 +85,50 @@ AUDIT_AUTO_DISCOVER_FORMATTERS = True  # optional, default True
 AUDIT_CHANGESET_CHECK_RELATIONSHIP = True  # optional, include FK changes in changeset
 ```
 
+### 5) Audit writes made outside a request
+
+Receivers drop every event that has no audit context, and only the middleware sets one.
+Scheduled jobs, Celery tasks and message consumers must open one explicitly:
+
+```python
+from celery import shared_task
+from ftn_audit import (
+    audit_context,
+    audit_context_from_snapshot,
+    snapshot_current_audit_context,
+    system_audit_context,
+)
+
+# A job or consumer acting on its own: events carry raw_route "SYSTEM|job:reopen_carts".
+with system_audit_context("job:reopen_carts"):
+    reopen_carts()
+
+# Also usable as a decorator, on plain and on async functions (not on generator
+# functions, even behind another decorator: that raises TypeError; open the scope
+# inside the body instead).
+@system_audit_context("consumer:summit_updated")
+def handle(event): ...
+
+# A Celery task acting on behalf of the user who triggered it.
+@shared_task
+def cleanup_task(cart_id, audit=None):
+    ctx = audit_context_from_snapshot(audit)
+    with audit_context(ctx) if ctx else system_audit_context("task:cleanup"):
+        ...
+
+# In the request that triggers it:
+cleanup_task.delay(cart_id, audit=snapshot_current_audit_context())
+```
+
+Both helpers restore the previous context on exit and hide the current request inside the block,
+so actor hydration never attributes these writes to an unrelated request's user.
+`audit_context()` raises `TypeError` for anything but an `AuditContext`, a `None` snapshot included,
+so a task that received no snapshot falls back to `system_audit_context()` as in the example above.
+`system_audit_context()` only accepts request metadata (`trace_id`, `ui_app`, `ui_flow`) besides
+the source; to act as a user, use `audit_context()` with that user's context. When `trace_id` is
+not given it is taken from the OpenTelemetry span active on entry, so a job run under a tracing
+span gets its events correlated with it, as request events are.
+
 ## Migration notes
 
 - Foreign-key auditing:
@@ -117,7 +161,8 @@ AUDIT_CHANGESET_CHECK_RELATIONSHIP = True  # optional, include FK changes in cha
 ## Known limitations
 
 - ContextVars do not cross process boundaries (e.g. Celery workers).
-  For background jobs, pass actor metadata explicitly and set `AuditContext` in task scope.
+  Pass `snapshot_current_audit_context()` to the task and restore it with `audit_context()`,
+  or run the task under `system_audit_context()` (see "Audit writes made outside a request").
 - `AUDIT_OTLP_FALLBACK` is reserved but not currently enforced by runtime behavior.
 - Django bulk operations bypass per-instance signals (`bulk_create`, `bulk_update`, queryset `update`, queryset `delete`).
   If needed, add explicit auditing at service-layer boundaries.
