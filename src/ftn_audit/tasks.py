@@ -85,10 +85,17 @@ def _build_log_record(payload: Dict[str, Any]):
 
 
 def _flatten_attributes(attrs: Dict[str, Any], prefix: str = "") -> Dict[str, str]:
-    """Flatten nested dicts into dot-separated keys with string values."""
+    """Flatten nested dicts into dot-separated keys with string values.
+
+    ``None`` values are omitted rather than sent as the string ``"null"``: Elasticsearch maps
+    each attribute from the first value it sees, and a ``"null"`` in a field mapped as a date
+    gets the whole record rejected. A missing key reads as no value.
+    """
     flat: Dict[str, str] = {}
     for key, value in attrs.items():
         full_key = f"{prefix}{key}" if not prefix else f"{prefix}.{key}"
+        if value is None:
+            continue
         if isinstance(value, dict):
             flat.update(_flatten_attributes(value, full_key))
         else:
