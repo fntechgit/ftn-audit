@@ -66,6 +66,50 @@ def test_build_log_record_extracts_trace_context_from_active_span():
     assert record.trace_flags == expected_trace_flags
 
 
+def test_build_log_record_omits_none_attributes():
+    # Elasticsearch maps changeset fields from their first value, so a "null" string in a field
+    # first seen as a date gets the whole record rejected. A missing key means no value.
+    payload = {
+        "description": "Updated cart #253",
+        "attributes": {
+            "audit.event_type": "update",
+            "user_id": None,
+            "audit.changeset": {
+                "status": {"old": "PendingPayment", "new": "Open"},
+                "checkout_date": {"old": "2026-10-28T18:24:07+00:00", "new": None},
+            },
+        },
+        "timestamp_ns": 123,
+    }
+
+    record = _build_log_record(payload)
+
+    assert dict(record.attributes) == {
+        "audit.event_type": "update",
+        "audit.changeset.status.old": "PendingPayment",
+        "audit.changeset.status.new": "Open",
+        "audit.changeset.checkout_date.old": "2026-10-28T18:24:07+00:00",
+    }
+
+
+def test_build_log_record_keeps_serializing_other_values_as_json():
+    payload = {
+        "description": "Updated cart #253",
+        "attributes": {"audit.changeset": {"raw_amount": {"old": 0, "new": 1500}, "locked": {"old": False, "new": True}}, "ids": [1, None]},
+        "timestamp_ns": 123,
+    }
+
+    record = _build_log_record(payload)
+
+    assert dict(record.attributes) == {
+        "audit.changeset.raw_amount.old": "0",
+        "audit.changeset.raw_amount.new": "1500",
+        "audit.changeset.locked.old": "false",
+        "audit.changeset.locked.new": "true",
+        "ids": "[1, null]",
+    }
+
+
 def test_emit_audit_log_task_retries_on_transient_failure():
     payload = {"description": "retry me", "attributes": {}, "timestamp_ns": 123}
     task = emit_audit_log_task._get_current_object()
