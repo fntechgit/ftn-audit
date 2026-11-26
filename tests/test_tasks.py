@@ -6,19 +6,72 @@ import pytest
 from opentelemetry.trace import TraceFlags
 
 from ftn_audit.tasks import _build_log_record
+from ftn_audit.tasks import emit_audit_log
 from ftn_audit.tasks import emit_audit_log_task
 
 
-@pytest.fixture(autouse=True)
-def _ensure_public_logrecord_symbol(monkeypatch):
-    import opentelemetry.sdk._logs as logs_module
+def _in_memory_logger_provider():
+    """A real SDK LoggerProvider whose records land in an in-memory exporter."""
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs import export
+    from opentelemetry.sdk.resources import Resource
 
-    if hasattr(logs_module, "LogRecord"):
-        return
+    # Renamed to InMemoryLogRecordExporter in SDK 1.39; the old name is gone in later releases.
+    exporter_class = getattr(export, "InMemoryLogRecordExporter", None) or export.InMemoryLogExporter
+    exporter = exporter_class()
+    provider = LoggerProvider(resource=Resource.create({"service.name": "audited-service"}))
+    provider.add_log_record_processor(export.SimpleLogRecordProcessor(exporter))
+    return provider, exporter
 
-    from opentelemetry.sdk._logs._internal import LogRecord as InternalLogRecord
 
-    monkeypatch.setattr(logs_module, "LogRecord", InternalLogRecord, raising=False)
+def test_emit_audit_log_exports_the_record_through_the_installed_sdk():
+    # Runs on the installed SDK without patching its classes: opentelemetry-sdk 1.39 removed
+    # opentelemetry.sdk._logs.LogRecord, and every audit event then failed with ImportError.
+    from opentelemetry.sdk.trace import TracerProvider
+
+    provider, exporter = _in_memory_logger_provider()
+    payload = {
+        "description": "Updated cart #253",
+        "attributes": {"audit.event_type": "update", "audit.changeset": {"status": {"old": "Open", "new": "CheckedOut"}}},
+        "timestamp_ns": 123456789,
+    }
+    tracer = TracerProvider().get_tracer("ftn-audit-test")
+
+    with patch("opentelemetry._logs.get_logger_provider", return_value=provider):
+        with tracer.start_as_current_span("request") as span:
+            emit_audit_log(payload)
+
+    (exported,) = exporter.get_finished_logs()
+    record = exported.log_record
+    assert record.body == "Updated cart #253"
+    assert record.timestamp == 123456789
+    assert record.severity_text == "INFO"
+    assert dict(record.attributes) == {
+        "audit.event_type": "update",
+        "audit.changeset.status.old": "Open",
+        "audit.changeset.status.new": "CheckedOut",
+    }
+    assert record.trace_id == span.get_span_context().trace_id
+    assert record.span_id == span.get_span_context().span_id
+
+
+def _sdk_has_its_own_log_record():
+    import opentelemetry.sdk._logs as sdk_logs
+
+    return hasattr(sdk_logs, "LogRecord")
+
+
+@pytest.mark.skipif(_sdk_has_its_own_log_record(), reason="SDK <= 1.38 exports its own LogRecord as built")
+def test_emit_audit_log_carries_the_provider_resource_on_sdks_without_their_own_log_record():
+    # From 1.39 the API record is wrapped with the provider's resource, which the OTLP exporter
+    # serializes; a record reaching the exporter without one cannot be encoded.
+    provider, exporter = _in_memory_logger_provider()
+
+    with patch("opentelemetry._logs.get_logger_provider", return_value=provider):
+        emit_audit_log({"description": "Created cart #1", "attributes": {}, "timestamp_ns": 1})
+
+    (exported,) = exporter.get_finished_logs()
+    assert exported.resource.attributes["service.name"] == "audited-service"
 
 
 def test_build_log_record_forwards_timestamp():
