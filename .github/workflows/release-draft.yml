@@ -1,0 +1,75 @@
+name: Draft release
+
+on:
+  push:
+    tags:
+      # X.Y.Z or vX.Y.Z, with an optional PEP 440 pre-release suffix (v1.0.0b7, 1.1.0rc1).
+      - "[0-9]+.[0-9]+.[0-9]+*"
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tagged commit must be on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag $GITHUB_REF_NAME points to a commit that is not on main"
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Tag must match pyproject version
+        run: |
+          pkg=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match pyproject.toml version $pkg"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Run tests
+        run: pytest tests/
+
+  draft:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A PEP 440 pre-release (a, b, rc, dev) is marked as a GitHub pre-release.
+          prerelease=""
+          if [[ "${GITHUB_REF_NAME#v}" =~ (a|b|rc)[0-9]+$|\.dev[0-9]+$ ]]; then
+            prerelease="--prerelease"
+          fi
+          sed "s/X\.Y\.Z/${GITHUB_REF_NAME}/g" .github/RELEASE_NOTES_TEMPLATE.md > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag --draft --generate-notes $prerelease \
+            --notes-file "$RUNNER_TEMP/notes.md"
