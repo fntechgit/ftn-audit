@@ -54,15 +54,27 @@ def emit_audit_log_task(self, payload: Dict[str, Any]) -> None:
         )
 
 
+def _log_record_class():
+    """The record class the installed SDK's ``Logger.emit`` exports with its resource.
+
+    Up to 1.38 the SDK has its own ``LogRecord``, and older releases (1.29) attach no resource to
+    an API record, so the exporters fail serializing it. 1.39 removed the SDK class: ``emit`` takes
+    the API record and wraps it in a ``ReadWriteLogRecord`` with the provider's resource.
+    """
+    try:
+        from opentelemetry.sdk._logs import LogRecord
+    except ImportError:
+        from opentelemetry._logs import LogRecord
+    return LogRecord
+
+
 def _build_log_record(payload: Dict[str, Any]):
     """Build an OTel LogRecord from our audit payload."""
-    # Build the SDK log record type (not API type), otherwise exporters may
-    # fail at serialization time expecting SDK fields such as `resource`.
     from opentelemetry._logs import SeverityNumber
     from opentelemetry import trace
     from opentelemetry.trace import INVALID_SPAN_ID, INVALID_TRACE_ID, TraceFlags
-    from opentelemetry.sdk._logs import LogRecord
 
+    LogRecord = _log_record_class()
     span_context = trace.get_current_span().get_span_context()
     trace_id = INVALID_TRACE_ID
     span_id = INVALID_SPAN_ID
